@@ -1,0 +1,8 @@
+-- before:
+-- type Lens f s a = (a -> f a) -> s -> f s
+-- but we can also modify the type of the part:
+-- type Lens s t a b = Functor f => (a -> f b) -> s -> f t
+-- ^ where changing a to b means that also s could have become a t. or something.
+-- if it is not changed:
+-- type Lens' s a = Functor f => (a -> f a) -> s -> f s
+-- note the mnemonics: s ~ source, t ~ target
