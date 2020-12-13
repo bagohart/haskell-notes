@@ -79,6 +79,20 @@ choosing l1 l2 = \g s -> -- g :: (a -> f b),   s :: (Either s1 s2)
 (<%~!) l g = (,) <$> (getConst . l (Const . g)) <*> (runIdentity . l (Identity . g))
 -- ok, actually it's not so bad.
 
+-- hm, actually this gets at something else: I can write
+-- ((\b -> (b,b)) . g)
+-- also as
+-- (,) <$> f <*> f
+-- or
+-- f &&& f
+-- or
+-- join (,) . f
+-- which seems pretty mysterious to me.
+-- not sure if the tuple is the Monad or the function.
+-- and maybe reading about Writer/WriterT may shed some light on this.
+-- wtf.
+-- I think this is just another rabbit hole looking at me :)
+
 -- modify target of lens, return the old value
 -- this is almost like the last one
 (<<%~) :: Lens s t a b -> (a -> b) -> s -> (a, t)
