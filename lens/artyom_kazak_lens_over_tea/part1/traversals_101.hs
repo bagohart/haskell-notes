@@ -1,4 +1,4 @@
-{-# LANGUAGE RankNTypes, TupleSections #-}
+{-# LANGUAGE RankNTypes, TupleSections, FlexibleInstances, MultiParamTypeClasses, FunctionalDependencies #-}
 
 import Data.Functor.Identity
 import Data.Functor.Const
@@ -114,6 +114,9 @@ moreAll1 = set3 (_all' 0) (-8) [100,600,0,200,0]
 moreAll2 = over3 (_all' 0) (+2) [100,600,0,200,0]
 -- this doesn't work without Monoids:
 moreAll3 = view3 (_all' (Sum 0)) [100,600,0,200,0]
+moreAll3' = view3 (_all' (First (Just 0))) $ (First . Just) <$> [100,600,0,200,0]
+moreAll3'' = view3 (_all' [0]) [[0],[0],[1],[2],[0]]
+moreAll3''' = view3 (_all' [0]) [[1],[2]]
 -- whereas this did:
 moreAll3Old = view3 (_all 0) [100,600,0,200,0]
 
@@ -130,3 +133,116 @@ moreAll3Old = view3 (_all 0) [100,600,0,200,0]
 -- and all positive tests are <*>-d together after g-ing them. (this is just Const val)
 -- I think this is still somewhat surprising.
 -- Not sure if any of this _all/_all' thingy is a good idea o___O
+
+-- the list hackery above seemed to work, so let's try to functionify that out:
+-- toListOf = all values
+-- recall, this was view:
+-- view3 :: Getting s a -> s -> a
+-- view3 l = getConst . l Const
+-- we want the same thing here, except the value is wrapped in a list:
+toListOf1 :: ((a -> Const [a] a) -> s -> Const [a] s) -> s -> [a]
+toListOf1 l = getConst . l (Const . pure)
+-- which is:
+-- toListOf l = getConst . l (\x -> Const [x])
+
+testToListOf1 = toListOf1 (_all' 0) [0,3,1,0]
+testToListOf1' = toListOf1 (_all' 0) [3,1]
+
+-- preview: like toListOf, but get only first value
+preview1 :: ((a -> Const (First a) a) -> s -> Const (First a) s) -> s -> Maybe a
+preview1 l = getFirst . getConst . l (Const . First . Just)
+
+testPreview1 = preview1 (_all' 0) [3,2,1,0]
+testPreview2 = preview1 (_all' 0) [3,2,1]
+
+-- has is like just use preview and check if there's anything there, but that would be too easy,
+-- so use another Monoid: Any
+has1 :: ((a -> Const Any a) -> s -> Const Any s) -> s -> Bool
+has1 l = getAny . getConst . l (const (Const (Any True)))
+
+hasPreview1 = has1 (_all' 0) [3,2,1]
+hasPreview2 = has1 (_all' 0) [3,2,1,0]
+
+-- now let's simplify the types. Recall:
+-- type Getting s a     = (a -> Const a a)  -> s -> Const a s
+-- type Setting s t a b = (a -> Identity b) -> s -> Identity t
+-- toListOf, preview, has have the same types as Getting, but with them monoidz. => ...
+type Getting2 r s a = (a -> Const r a) -> s -> Const r s
+
+
+view4 ::     Getting2 a         s a -> s -> a
+view4 = view3
+
+toListOf2 :: Getting2 [a]       s a -> s -> [a]
+toListOf2 = toListOf1
+
+preview2 ::  Getting2 (First a) s a -> s -> Maybe a
+preview2 = preview1
+
+has2 ::      Getting2 Any       s a -> s -> Bool
+has2 = has1
+
+-- what does the type of Getting2 mean?
+-- "if you have a function to get an r from an a, collect all a from s and combine their r's and return them"
+-- or keep in mind that Const r a ~~ r, and then its type is not so hard:
+-- type Getting2 r s a ~= (a -> r) -> s -> r
+-- Analogously,
+-- type Setting s t a b ~= (a -> b) -> s -> t
+
+-- why not implement everything in terms of toListOf? Because it would be too easy :)
+
+-- also, toListOf is broken:
+-- toListOf1 :: ((a -> Const [a] a) -> s -> Const [a] s) -> s -> [a]
+-- toListOf1 l = getConst . l (Const . pure)
+-- because this creates a long list of lists, and then appends them together, which can blow up.
+-- in case of a simple list, this even works because traverse would append in the right, cheap order:
+-- [1] ++ ([2] ++ ...)
+-- but we can construct a tree with two list-like branches, and then we get too many big appends.
+-- so let's difference list this.
+
+data AppendList a = JustList [a] | Append (AppendList a) (AppendList a)
+
+-- we need to reorder (a ++ b) ++ y ... into a ++ (b ++ (y ++ ...))
+doAppends :: AppendList a -> [a]
+doAppends (JustList xs) = xs
+doAppends (Append (JustList xs) y) = xs ++ doAppends y
+doAppends (Append (Append a b) y) = doAppends (Append a (Append b y))
+
+instance Semigroup (AppendList a) where 
+    (<>) = Append
+
+instance Monoid (AppendList a) where 
+    mempty = JustList []
+
+toListOf3 :: Getting2 (AppendList a) s a -> s -> [a]
+toListOf3 l = doAppends . getConst . l (Const . JustList . pure)
+
+-- also there is a weird trick that we can just build a function that appends the list together
+-- which kind of achieves the same result:
+
+toListOf4 :: Getting2 (Endo [a]) s a -> s -> [a]
+toListOf4 l = (`appEndo` []) . getConst . l (\x -> Const (Endo (x:)))
+
+-- so what this actually does is it builds up a bunch of functions like this:
+-- (\xs -> x3 : xs) . (\xs -> x2 : xs) . (\xs -> x1 : xs) $ []
+-- = x3 : x2 : x1 : []
+-- But wrapped in Endos wrapped in Const.
+
+-- AppLens is called Traversal in lens library.
+type Traversal s t a b = forall f. Applicative f => (a -> f b) -> s -> f t
+type Traversal' s a = Traversal s s a a
+-- it has even more things.
+
+-- each = focus on every element in a monomorphic container
+
+class Each s t a b | s -> a, t -> b, s b -> t, t a -> s where 
+    each :: Traversal s t a b
+
+-- it's just traverse in many cases, e.g. [],Map,Maybe
+instance Traversable t => Each (t a) (t b) a b where 
+    each = traverse
+
+-- but not Tuples, because (a,) is a Traverseable instance, but not (,) because (,) is not monomorphic:
+tupleTraverseTest1 = traverse (\_ -> putStr "? new: " >> readLn :: IO Bool) (1,2) -- enter True here
+
+-- continue: dissecting each
