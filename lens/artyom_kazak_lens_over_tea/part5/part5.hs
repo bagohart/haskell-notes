@@ -352,4 +352,50 @@ prism2 bt sEta = dimap sEta (either pure (fmap bt)) . right''
     -- right'' :: p a b -> p (Either c a) (Either c b)
     -- type Prism s t a b = forall p f. (Profunctor p, Bypass p, Applicative f) => p a (f b) -> p s (f t)
 
--- todo next: Market t_t
+-- decompose prisms back to the functions with which it was created:
+data Market a b s t = Market (b -> t) (s -> Either t a)
+
+instance Functor (Market a b s) where 
+    fmap :: (t -> u) -> Market a b s t -> Market a b s u 
+    fmap g (Market bt sEta) = Market (g . bt) ((either (Left . g) Right) . sEta)
+
+instance Profunctor (Market a b) where 
+    lmap :: (s -> s2) -> Market a b s2 t -> Market a b s t
+    lmap g (Market bt s2Eta) = Market bt (s2Eta . g)
+
+    rmap :: (t -> u) -> Market a b s t -> Market a b s u 
+    rmap = fmap
+
+-- this collides with the things. wtf
+-- instance Choice' (Market a b) where 
+--     --                           Market (b -> Either c t) (Either c s -> Either (Either c t) a)
+--     right'' :: Market a b s t -> Market a b (Either c s) (Either c t)
+--     right'' (Market bt sEta) = Market (Right . bt) (either (Left . Left) ((either (Left . Right) (Right)) . sEta))
+--  ^ this is too wild for even the sample solutions, which breaks down the nested eithers in a case distinction.
+
+-- type Prism s t a b = forall p f. (Profunctor p, Bypass p, Applicative f) => p a (f b) -> p s (f t)
+unPrism :: Prism s t a b -> (b -> t, s -> Either t a)
+unPrism p = 
+    let -- bft :: b -> Identity t
+        -- sEtfa :: s -> Either (Identity t) a
+        Market bft sEtfa = p (Market Identity Right) -- put in Market a b a b
+        bt = runIdentity . bft
+        sEta = either (Left . runIdentity) Right . sEtfa
+     in (bt, sEta)
+    -- idea: use Market to put functions into the prism that do nothing. result of prism is new market that contains functions, maybe.
+    -- get functions out and remove all the wrapping pain.
+
+-- Lens defines withPrism instead, which looks like unPrism, but in CPS o_O
+-- also it uses APrism which is Prism with concrete profunctors and Applicatives (Market and Identity)
+-- which means it has less requirements, since Prism works on all the Profunctors and Applicatives.
+
+type Prism1 s t a b = forall p f. (Choice' p, Functor f) => p a (f b) -> p s (f t)
+
+-- prism1ToIso :: Prism1 s t a b -> Iso s t a b
+-- prism1ToIso = undefined
+-- sa = ...
+-- ^ I lost iso somewhere...
+getSa :: Prism1 s t a b -> (s -> a)
+getSa p = unForget $ p (Forget' id :: Forget' a a (Identity b))
+-- ^ I did this before... there seems to be nothing new here?
+
